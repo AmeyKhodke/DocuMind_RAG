@@ -15,16 +15,66 @@ from huggingface_hub.utils import disable_progress_bars
 
 disable_progress_bars()
 
-BASE_PATH = "E:/B TECH IT/Celebal Internship/Assignment_7"
-ENV_PATH = Path(f"{BASE_PATH}/.env")
+# Try loading env from multiple possible locations
+possible_env_paths = [
+    Path(__file__).parent / ".env",
+    Path(".env"),
+    Path("E:/B TECH IT/Celebal Internship/Assignment_7/.env")
+]
 
-if ENV_PATH.exists():
-    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.startswith("#"):
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+for env_path in possible_env_paths:
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        break
 
-hf_token = os.getenv("HF_TOKEN")
+def get_groq_api_key():
+    # 1. Try environment variable
+    api_key = os.getenv("GROQ_API_KEY")
+    if api_key:
+        return api_key
+        
+    # 2. Try streamlit secrets
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and st.secrets:
+            # Check direct keys
+            for key in ["GROQ_API_KEY", "groq_api_key"]:
+                if key in st.secrets:
+                    val = st.secrets[key]
+                    if val:
+                        return val
+            # Check nested dict keys e.g. [groq] api_key = "..."
+            groq_sec = st.secrets.get("groq")
+            if isinstance(groq_sec, dict):
+                for key in ["api_key", "API_KEY"]:
+                    if key in groq_sec and groq_sec[key]:
+                        return groq_sec[key]
+            elif hasattr(groq_sec, "get"):
+                for key in ["api_key", "API_KEY"]:
+                    val = groq_sec.get(key)
+                    if val:
+                        return val
+    except Exception as e:
+        print(f"Error reading streamlit secrets: {e}")
+        
+    return None
+
+def get_hf_token():
+    token = os.getenv("HF_TOKEN")
+    if token:
+        return token
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and st.secrets:
+            for key in ["HF_TOKEN", "hf_token"]:
+                if key in st.secrets and st.secrets[key]:
+                    return st.secrets[key]
+    except Exception:
+        pass
+    return None
 
 # --- GLOBAL INITIALIZATIONS ---
 EMBEDDING_MODEL = None
@@ -173,8 +223,9 @@ def create_lightweight_embedding(text, dimensions=384):
     return [value / norm for value in vector]
 
 def embedding_generation(chunks):
-    if hf_token:
-        os.environ["HF_TOKEN"] = hf_token
+    token = get_hf_token()
+    if token:
+        os.environ["HF_TOKEN"] = token
     try:
         embedding_model = get_embedding_model()
         # Enforce list formatting for SentenceTransformer compatibility
@@ -252,9 +303,9 @@ def extract_context(results):
     return clean_context_text(" ".join(flattened))
 
 def call_groq_api(prompt, temperature=0.0):
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = get_groq_api_key()
     if not api_key:
-        raise ValueError("GROQ_API_KEY not found in environment.")
+        raise ValueError("GROQ_API_KEY not found in environment or streamlit secrets.")
         
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -281,18 +332,24 @@ def call_groq_api(prompt, temperature=0.0):
         except Exception as e:
             last_err = e
             print(f"Groq API error for model {model}: {e}")
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    print(f"Response details: {e.response.text}")
+                except Exception:
+                    pass
             continue
     raise last_err
 
 def generate_llm_response(prompt, temperature=0.0, timeout=30):
     # Tier 1: Try Groq API
-    if os.getenv("GROQ_API_KEY"):
+    api_key = get_groq_api_key()
+    if api_key:
         try:
             return call_groq_api(prompt, temperature=temperature), "LLM Groq API"
         except Exception as e:
             print(f"Groq API failed: {e}. Falling back to local Ollama.")
     else:
-        print("GROQ_API_KEY not configured in environment. Trying local Ollama.")
+        print("GROQ_API_KEY not configured. Trying local Ollama.")
         
     # Tier 2: Try local Ollama
     try:

@@ -4,12 +4,16 @@ venv/
 ENV/
 env/
 .streamlit/
+.cache/
 
 # Environments
 .env
 .env.local
 .env.*
 *.env
+
+# Test & Temp artifacts
+sample_test.*
 
 # Python
 __pycache__/

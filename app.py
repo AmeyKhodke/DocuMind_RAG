@@ -5,31 +5,33 @@ def render_source_tag(source):
     if not source:
         return
     
-    # Select colors and icons based on the source
-    if "groq" in source.lower():
+    source_lower = source.lower()
+    # Select colors and icons based on the primary source and translation status
+    if "groq" in source_lower:
         color = "#00FF66"  # Vibrant neon green
         bg_color = "rgba(0, 255, 102, 0.08)"
         border_color = "rgba(0, 255, 102, 0.25)"
         icon = "⚡"
-        badge_text = "LLM Groq API"
-    elif "ollama" in source.lower():
+    elif "ollama" in source_lower:
         color = "#3399FF"  # Soft sky blue
         bg_color = "rgba(51, 153, 255, 0.08)"
         border_color = "rgba(51, 153, 255, 0.25)"
         icon = "🦙"
-        badge_text = source
-    elif "heuristic" in source.lower() or "scoring" in source.lower() or "fallback" in source.lower():
+    elif "heuristic" in source_lower or "scoring" in source_lower or "fallback" in source_lower:
         color = "#FF9900"  # Amber/orange
         bg_color = "rgba(255, 153, 0, 0.08)"
         border_color = "rgba(255, 153, 0, 0.25)"
         icon = "⚙️"
-        badge_text = source
     else:
         color = "#FF4444"  # Coral red
         bg_color = "rgba(255, 68, 68, 0.08)"
         border_color = "rgba(255, 68, 68, 0.25)"
         icon = "ℹ️"
-        badge_text = source
+
+    if "sarvam" in source_lower:
+        icon += " 🌐"
+
+    badge_text = source
 
     html = f"""
     <div style="
@@ -55,7 +57,7 @@ def render_source_tag(source):
     st.markdown(html, unsafe_allow_html=True)
 
 app_title = "RAG Application Dashboard"
-app_description = "This dashboard allows users to interact with the RAG application through a chat interface."
+app_description = "This dashboard allows users to interact with the RAG application through a chat interface with multi-language support."
 
 st.set_page_config(page_title=app_title, page_icon="🤖", layout="wide")
 st.title(app_title)
@@ -70,10 +72,15 @@ if "chat_history" not in st.session_state:
     st.session_state["chat_history"] = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.title("Document Upload")
+st.sidebar.title("Document Upload & Settings")
 st.sidebar.write("Upload a PDF, DOCX, or TXT file to ask questions about it.")
 
 file = st.sidebar.file_uploader("Upload your documents here", type=["pdf", "docx", "txt"], key="file_uploader")
+
+# Multilingual Selector (Extensible)
+language_options = list(rag_service.LANGUAGE_CODES.keys())
+target_lang = st.sidebar.selectbox("Answer language", options=language_options, index=0)
+st.session_state["target_language"] = target_lang
 
 if file is not None:
     st.sidebar.success(f"Selected file: {file.name}")
@@ -116,9 +123,9 @@ if clear_clicked:
 if summarize_clicked and st.session_state["ingested"] is not None:
     with st.spinner("Reading document and summarizing..."):
         try:
-            summary, source = rag_service.summarize_document(st.session_state["ingested"])
+            summary, source = rag_service.summarize_document(st.session_state["ingested"], target_lang=target_lang)
             st.session_state["chat_history"].append({
-                "user": "Summarize the whole document.",
+                "user": f"Summarize the whole document. [{target_lang}]",
                 "bot": summary,
                 "source": source
             })
@@ -151,9 +158,9 @@ if user_input:
         st.session_state["chat_history"].append({"user": user_query, "bot": response, "source": "System Info"})
     elif any(kw in user_query.lower() for kw in SUMMARY_KEYWORDS):
         with st.chat_message("assistant"):
-            with st.spinner("Reading the whole document to summarize it (this may take a bit)..."):
+            with st.spinner("Reading the whole document to summarize it..."):
                 try:
-                    response, source = rag_service.summarize_document(st.session_state["ingested"])
+                    response, source = rag_service.summarize_document(st.session_state["ingested"], target_lang=target_lang)
                     st.write(response)
                     render_source_tag(source)
                 except Exception as e:
@@ -164,14 +171,28 @@ if user_input:
                 st.rerun()
     else:
         with st.chat_message("assistant"):
-            with st.spinner("Generating answer..."):
-                try:
-                    response, source = rag_service.answer_query(st.session_state["ingested"], user_query)
-                    st.write(response)
-                    render_source_tag(source)
-                except Exception as e:
-                    response = f"Error retrieving answer: {e}"
-                    source = "Error"
-                    st.write(response)
-                st.session_state["chat_history"].append({"user": user_query, "bot": response, "source": source})
-                st.rerun()
+            try:
+                if target_lang == "English":
+                    res_stream_or_text, source = rag_service.answer_query(
+                        st.session_state["ingested"], user_query, target_lang=target_lang, stream=True
+                    )
+                    if hasattr(res_stream_or_text, "__iter__") and not isinstance(res_stream_or_text, str):
+                        response = st.write_stream(res_stream_or_text)
+                    else:
+                        response = res_stream_or_text
+                        st.write(response)
+                else:
+                    with st.spinner("Generating and translating answer..."):
+                        response, source = rag_service.answer_query(
+                            st.session_state["ingested"], user_query, target_lang=target_lang, stream=False
+                        )
+                        st.write(response)
+                
+                render_source_tag(source)
+            except Exception as e:
+                response = f"Error retrieving answer: {e}"
+                source = "Error"
+                st.write(response)
+            
+            st.session_state["chat_history"].append({"user": user_query, "bot": response, "source": source})
+            st.rerun()

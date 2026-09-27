@@ -2,60 +2,11 @@ import streamlit as st
 import rag_service
 
 def render_source_tag(source):
-    if not source:
-        return
-    
-    # Select colors and icons based on the source
-    if "groq" in source.lower():
-        color = "#00FF66"  # Vibrant neon green
-        bg_color = "rgba(0, 255, 102, 0.08)"
-        border_color = "rgba(0, 255, 102, 0.25)"
-        icon = "⚡"
-        badge_text = "LLM Groq API"
-    elif "ollama" in source.lower():
-        color = "#3399FF"  # Soft sky blue
-        bg_color = "rgba(51, 153, 255, 0.08)"
-        border_color = "rgba(51, 153, 255, 0.25)"
-        icon = "🦙"
-        badge_text = source
-    elif "heuristic" in source.lower() or "scoring" in source.lower() or "fallback" in source.lower():
-        color = "#FF9900"  # Amber/orange
-        bg_color = "rgba(255, 153, 0, 0.08)"
-        border_color = "rgba(255, 153, 0, 0.25)"
-        icon = "⚙️"
-        badge_text = source
-    else:
-        color = "#FF4444"  # Coral red
-        bg_color = "rgba(255, 68, 68, 0.08)"
-        border_color = "rgba(255, 68, 68, 0.25)"
-        icon = "ℹ️"
-        badge_text = source
+    # Source tag hidden as per user preference
+    return
 
-    html = f"""
-    <div style="
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.8rem;
-        background-color: {bg_color};
-        color: {color};
-        border: 1px solid {border_color};
-        font-weight: 500;
-        margin-top: 8px;
-        margin-bottom: 2px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        font-family: 'Inter', -apple-system, sans-serif;
-    ">
-        <span>{icon}</span>
-        <span>Source: <strong>{badge_text}</strong></span>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-
-app_title = "RAG Application Dashboard"
-app_description = "This dashboard allows users to interact with the RAG application through a chat interface."
+app_title = "DocuMind RAG — Multilingual Document Assistant"
+app_description = "Intelligent document QA & summarization supporting English, Hindi, and Marathi with Sarvam AI and Groq."
 
 st.set_page_config(page_title=app_title, page_icon="🤖", layout="wide")
 st.title(app_title)
@@ -94,7 +45,10 @@ if file is not None:
 
     if st.session_state["ingested"] is not None:
         total_pages = st.session_state["ingested"].get("total_pages", "N/A")
+        lang_info = st.session_state["ingested"].get("language", {"code": "en", "name": "English"})
+        lang_flag = "🇬🇧" if lang_info.get("code") == "en" else "🇮🇳"
         st.sidebar.write(f"Pages/Chunks processed: {total_pages}")
+        st.sidebar.info(f"Detected Language: **{lang_flag} {lang_info.get('name', 'English')}**")
         st.sidebar.success("Document ready for questions.")
 else:
     if st.session_state["ingested_file_id"] is not None:
@@ -102,6 +56,23 @@ else:
         st.session_state["ingested_file_id"] = None
         st.session_state["chat_history"] = []
     st.sidebar.info("No document uploaded yet.")
+
+# --- MULTILINGUAL SETTINGS ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🌐 Language Settings")
+target_lang_choice = st.sidebar.selectbox(
+    "Summary & Response Language",
+    options=["Same as Document", "English", "Hindi (हिन्दी)", "Marathi (मराठी)"],
+    index=0,
+    help="Select the language for summaries and answers (supports cross-lingual generation via Sarvam AI / Groq)."
+)
+target_lang_map = {
+    "Same as Document": "source",
+    "English": "en",
+    "Hindi (हिन्दी)": "hi",
+    "Marathi (मराठी)": "mr"
+}
+selected_target_lang = target_lang_map.get(target_lang_choice, "source")
 
 # --- SIDEBAR ACTIONS ---
 col1, col2 = st.sidebar.columns(2)
@@ -114,11 +85,15 @@ if clear_clicked:
     st.rerun()
 
 if summarize_clicked and st.session_state["ingested"] is not None:
-    with st.spinner("Reading document and summarizing..."):
+    with st.spinner("Reading document and generating multilingual summary..."):
         try:
-            summary, source = rag_service.summarize_document(st.session_state["ingested"])
+            summary, source = rag_service.summarize_document(
+                st.session_state["ingested"], 
+                target_language=selected_target_lang
+            )
+            lang_label = target_lang_choice if target_lang_choice != "Same as Document" else "Document's original language"
             st.session_state["chat_history"].append({
-                "user": "Summarize the whole document.",
+                "user": f"Summarize the whole document in {lang_label}.",
                 "bot": summary,
                 "source": source
             })
@@ -135,14 +110,14 @@ for chat in st.session_state["chat_history"]:
         if "source" in chat and chat["source"]:
             render_source_tag(chat["source"])
 
-user_input = st.chat_input("Type your message here...")
+user_input = st.chat_input("Type your message here (English, Hindi, Marathi)...")
 
 if user_input:
     user_query = user_input.strip()
     with st.chat_message("user"):
         st.write(user_query)
         
-    SUMMARY_KEYWORDS = ["summary", "summarize", "summarise", "what is this document about", "what is the document about", "overview of the document", "tl;dr"]
+    SUMMARY_KEYWORDS = ["summary", "summarize", "summarise", "what is this document about", "what is the document about", "overview of the document", "tl;dr", "सारांश", "संक्षेप", "गोषवारा"]
     
     if st.session_state["ingested"] is None:
         response = "Please upload a document before asking a question."
@@ -151,9 +126,12 @@ if user_input:
         st.session_state["chat_history"].append({"user": user_query, "bot": response, "source": "System Info"})
     elif any(kw in user_query.lower() for kw in SUMMARY_KEYWORDS):
         with st.chat_message("assistant"):
-            with st.spinner("Reading the whole document to summarize it (this may take a bit)..."):
+            with st.spinner("Generating multilingual summary..."):
                 try:
-                    response, source = rag_service.summarize_document(st.session_state["ingested"])
+                    response, source = rag_service.summarize_document(
+                        st.session_state["ingested"], 
+                        target_language=selected_target_lang
+                    )
                     st.write(response)
                     render_source_tag(source)
                 except Exception as e:
@@ -166,7 +144,11 @@ if user_input:
         with st.chat_message("assistant"):
             with st.spinner("Generating answer..."):
                 try:
-                    response, source = rag_service.answer_query(st.session_state["ingested"], user_query)
+                    response, source = rag_service.answer_query(
+                        st.session_state["ingested"], 
+                        user_query, 
+                        target_language=selected_target_lang
+                    )
                     st.write(response)
                     render_source_tag(source)
                 except Exception as e:
